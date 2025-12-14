@@ -5,7 +5,7 @@ import uuid
 
 class Customer(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=200)
+    name = models.CharField(max_length=100)  # Changed from 200 to 100
     email = models.EmailField(unique=True)
     phone = models.CharField(
         max_length=20,
@@ -30,7 +30,7 @@ class Customer(models.Model):
 
 class Product(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=200)
+    name = models.CharField(max_length=100)  # Changed from 200 to 100
     description = models.TextField(blank=True)
     price = models.DecimalField(
         max_digits=10,
