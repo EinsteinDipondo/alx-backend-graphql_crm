@@ -1,11 +1,17 @@
-# alx_backend_graphql_crm/settings.py
+# alx_backend_graphql/settings.py
+"""
+Django settings for alx_backend_graphql project.
+"""
+
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-your-secret-key-here'
+# Quick-start development settings - unsuitable for production
+SECRET_KEY = 'django-insecure-your-secret-key-change-in-production'
 
+# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
 ALLOWED_HOSTS = []
@@ -36,7 +42,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'alx_backend_graphql_crm.urls'
+ROOT_URLCONF = 'alx_backend_graphql.urls'
 
 TEMPLATES = [
     {
@@ -54,7 +60,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'alx_backend_graphql_crm.wsgi.application'
+WSGI_APPLICATION = 'alx_backend_graphql.wsgi.application'
 
 # Database
 DATABASES = {
@@ -94,5 +100,5 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # GraphQL Configuration
 GRAPHENE = {
-    "SCHEMA": "alx_backend_graphql_crm.schema.schema"
+    "SCHEMA": "alx_backend_graphql.schema.schema"
 }

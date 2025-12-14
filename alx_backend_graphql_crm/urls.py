@@ -1,4 +1,4 @@
-# alx_backend_graphql_crm/urls.py
+# alx_backend_graphql/urls.py
 from django.contrib import admin
 from django.urls import path
 from graphene_django.views import GraphQLView
