@@ -1,0 +1,4 @@
+# requirements.txt
+Django>=4.0
+graphene-django>=3.0
+django-filter>=23.0
