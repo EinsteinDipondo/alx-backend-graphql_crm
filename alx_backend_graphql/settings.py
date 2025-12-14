@@ -27,9 +27,10 @@ INSTALLED_APPS = [
     
     # Third-party apps
     'graphene_django',
+    'django_filters',  # Add this line
     
     # Local apps
-    'crm',  # Make sure this is included
+    'crm',
 ]
 
 MIDDLEWARE = [
