@@ -29,7 +29,7 @@ INSTALLED_APPS = [
     'graphene_django',
     
     # Local apps
-    'crm',
+    'crm',  # Make sure this is included
 ]
 
 MIDDLEWARE = [
