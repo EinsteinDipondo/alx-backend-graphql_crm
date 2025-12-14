@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from decimal import Decimal
 import re
+import uuid
 
 from .models import Customer, Product, Order
 
@@ -58,20 +59,20 @@ class OrderInput(graphene.InputObjectType):
 
 
 # ============================================
-# Custom Error Types
+# Response Types for Errors
 # ============================================
 class ErrorType(graphene.ObjectType):
     field = graphene.String()
     message = graphene.String()
 
 
-class BulkCreateResult(graphene.ObjectType):
+class BulkCreateResponse(graphene.ObjectType):
     customers = graphene.List(CustomerType)
     errors = graphene.List(ErrorType)
 
 
 # ============================================
-# Mutations
+# Mutation: CreateCustomer
 # ============================================
 class CreateCustomer(graphene.Mutation):
     class Arguments:
@@ -86,14 +87,22 @@ class CreateCustomer(graphene.Mutation):
         """Validate phone number format"""
         if not phone:
             return True
-        pattern = r'^(\+\d{1,3}[- ]?)?\d{10}$'
+        # Accept formats: +1234567890, 123-456-7890, 1234567890
+        pattern = r'^(\+\d{1,3}[- ]?)?\d{3}[- ]?\d{3}[- ]?\d{4}$'
         return bool(re.match(pattern, phone))
     
     @classmethod
     def mutate(cls, root, info, input):
         errors = []
         
-        # Validate email
+        # Validate required fields
+        if not input.name or not input.name.strip():
+            errors.append(ErrorType(
+                field='name',
+                message='Name is required'
+            ))
+        
+        # Validate email format
         try:
             validate_email(input.email)
         except ValidationError:
@@ -102,44 +111,52 @@ class CreateCustomer(graphene.Mutation):
                 message='Invalid email format'
             ))
         
-        # Validate phone
-        if input.phone and not cls.validate_phone(input.phone):
-            errors.append(ErrorType(
-                field='phone',
-                message='Phone must be in format: +1234567890 or 1234567890'
-            ))
-        
-        # Check for duplicate email
+        # Validate email uniqueness
         if Customer.objects.filter(email=input.email).exists():
             errors.append(ErrorType(
                 field='email',
                 message='Email already exists'
             ))
         
+        # Validate phone format if provided
+        if input.phone and not cls.validate_phone(input.phone):
+            errors.append(ErrorType(
+                field='phone',
+                message='Phone must be in format: +1234567890 or 123-456-7890'
+            ))
+        
+        # Return errors if any
         if errors:
             return CreateCustomer(errors=errors)
         
         try:
+            # Create customer
             customer = Customer.objects.create(
-                name=input.name,
-                email=input.email,
+                name=input.name.strip(),
+                email=input.email.lower(),
                 phone=input.phone if input.phone else None
             )
+            
             return CreateCustomer(
                 customer=customer,
-                message='Customer created successfully'
+                message='Customer created successfully',
+                errors=[]
             )
+            
         except Exception as e:
             return CreateCustomer(
                 errors=[ErrorType(field='__all__', message=str(e))]
             )
 
 
+# ============================================
+# Mutation: BulkCreateCustomers
+# ============================================
 class BulkCreateCustomers(graphene.Mutation):
     class Arguments:
         inputs = graphene.List(CustomerInput, required=True)
     
-    result = graphene.Field(BulkCreateResult)
+    result = graphene.Field(BulkCreateResponse)
     
     @classmethod
     def mutate(cls, root, info, inputs):
@@ -147,55 +164,79 @@ class BulkCreateCustomers(graphene.Mutation):
         errors = []
         
         with transaction.atomic():
-            for index, input_data in enumerate(inputs):
+            for index, customer_input in enumerate(inputs):
                 try:
-                    # Validate email
-                    validate_email(input_data.email)
-                    
-                    # Check for duplicate email
-                    if Customer.objects.filter(email=input_data.email).exists():
+                    # Validate required fields
+                    if not customer_input.name or not customer_input.name.strip():
                         errors.append(ErrorType(
-                            field=f'customers[{index}].email',
+                            field=f'inputs[{index}].name',
+                            message='Name is required'
+                        ))
+                        continue
+                    
+                    # Validate email format
+                    try:
+                        validate_email(customer_input.email)
+                    except ValidationError:
+                        errors.append(ErrorType(
+                            field=f'inputs[{index}].email',
+                            message='Invalid email format'
+                        ))
+                        continue
+                    
+                    # Check for duplicate email in database
+                    if Customer.objects.filter(email=customer_input.email).exists():
+                        errors.append(ErrorType(
+                            field=f'inputs[{index}].email',
                             message='Email already exists'
                         ))
                         continue
                     
-                    # Validate phone
-                    if input_data.phone:
-                        pattern = r'^(\+\d{1,3}[- ]?)?\d{10}$'
-                        if not re.match(pattern, input_data.phone):
-                            errors.append(ErrorType(
-                                field=f'customers[{index}].phone',
-                                message='Invalid phone format'
-                            ))
-                            continue
+                    # Check for duplicate email in current batch
+                    email_in_batch = any(
+                        c.email == customer_input.email 
+                        for c in customers
+                    )
+                    if email_in_batch:
+                        errors.append(ErrorType(
+                            field=f'inputs[{index}].email',
+                            message='Duplicate email in batch'
+                        ))
+                        continue
                     
+                    # Validate phone format if provided
+                    if customer_input.phone and not CreateCustomer.validate_phone(customer_input.phone):
+                        errors.append(ErrorType(
+                            field=f'inputs[{index}].phone',
+                            message='Invalid phone format'
+                        ))
+                        continue
+                    
+                    # Create customer
                     customer = Customer.objects.create(
-                        name=input_data.name,
-                        email=input_data.email,
-                        phone=input_data.phone if input_data.phone else None
+                        name=customer_input.name.strip(),
+                        email=customer_input.email.lower(),
+                        phone=customer_input.phone if customer_input.phone else None
                     )
                     customers.append(customer)
                     
-                except ValidationError as e:
-                    errors.append(ErrorType(
-                        field=f'customers[{index}].email',
-                        message=str(e)
-                    ))
                 except Exception as e:
                     errors.append(ErrorType(
-                        field=f'customers[{index}]',
+                        field=f'inputs[{index}]',
                         message=str(e)
                     ))
         
         return BulkCreateCustomers(
-            result=BulkCreateResult(
+            result=BulkCreateResponse(
                 customers=customers,
                 errors=errors
             )
         )
 
 
+# ============================================
+# Mutation: CreateProduct
+# ============================================
 class CreateProduct(graphene.Mutation):
     class Arguments:
         input = ProductInput(required=True)
@@ -207,6 +248,13 @@ class CreateProduct(graphene.Mutation):
     def mutate(cls, root, info, input):
         errors = []
         
+        # Validate name
+        if not input.name or not input.name.strip():
+            errors.append(ErrorType(
+                field='name',
+                message='Product name is required'
+            ))
+        
         # Validate price
         if input.price <= Decimal('0'):
             errors.append(ErrorType(
@@ -215,7 +263,7 @@ class CreateProduct(graphene.Mutation):
             ))
         
         # Validate stock
-        if input.stock < 0:
+        if input.stock is not None and input.stock < 0:
             errors.append(ErrorType(
                 field='stock',
                 message='Stock cannot be negative'
@@ -225,18 +273,27 @@ class CreateProduct(graphene.Mutation):
             return CreateProduct(errors=errors)
         
         try:
+            # Create product
             product = Product.objects.create(
-                name=input.name,
+                name=input.name.strip(),
                 price=input.price,
                 stock=input.stock if input.stock is not None else 0
             )
-            return CreateProduct(product=product)
+            
+            return CreateProduct(
+                product=product,
+                errors=[]
+            )
+            
         except Exception as e:
             return CreateProduct(
                 errors=[ErrorType(field='__all__', message=str(e))]
             )
 
 
+# ============================================
+# Mutation: CreateOrder
+# ============================================
 class CreateOrder(graphene.Mutation):
     class Arguments:
         input = OrderInput(required=True)
@@ -247,6 +304,8 @@ class CreateOrder(graphene.Mutation):
     @classmethod
     def mutate(cls, root, info, input):
         errors = []
+        customer = None
+        products = []
         
         # Validate customer exists
         try:
@@ -254,13 +313,21 @@ class CreateOrder(graphene.Mutation):
         except Customer.DoesNotExist:
             errors.append(ErrorType(
                 field='customer_id',
-                message='Customer not found'
+                message=f'Customer with ID {input.customer_id} not found'
             ))
-            customer = None
+        except ValueError:
+            errors.append(ErrorType(
+                field='customer_id',
+                message='Invalid customer ID format'
+            ))
         
         # Validate products
-        products = []
-        if input.product_ids:
+        if not input.product_ids:
+            errors.append(ErrorType(
+                field='product_ids',
+                message='At least one product is required'
+            ))
+        else:
             for idx, product_id in enumerate(input.product_ids):
                 try:
                     product = Product.objects.get(id=product_id)
@@ -270,13 +337,19 @@ class CreateOrder(graphene.Mutation):
                         field=f'product_ids[{idx}]',
                         message=f'Product with ID {product_id} not found'
                     ))
+                except ValueError:
+                    errors.append(ErrorType(
+                        field=f'product_ids[{idx}]',
+                        message=f'Invalid product ID format: {product_id}'
+                    ))
         
-        # Validate at least one product
-        if not products:
-            errors.append(ErrorType(
-                field='product_ids',
-                message='At least one valid product is required'
-            ))
+        # Check stock availability (optional enhancement)
+        for product in products:
+            if product.stock <= 0:
+                errors.append(ErrorType(
+                    field='product_ids',
+                    message=f'Product {product.name} is out of stock'
+                ))
         
         if errors:
             return CreateOrder(errors=errors)
@@ -286,16 +359,27 @@ class CreateOrder(graphene.Mutation):
                 # Create order
                 order = Order.objects.create(
                     customer=customer,
-                    order_date=input.order_date if input.order_date else None
+                    order_date=input.order_date if input.order_date else None,
+                    status='PENDING'
                 )
                 
-                # Add products
+                # Add products to order
                 order.products.set(products)
                 
-                # Calculate total
+                # Calculate and save total amount
                 order.calculate_total()
                 
-                return CreateOrder(order=order)
+                # Update product stock (optional)
+                for product in products:
+                    if product.stock > 0:
+                        product.stock -= 1
+                        product.save()
+                
+                return CreateOrder(
+                    order=order,
+                    errors=[]
+                )
+                
         except Exception as e:
             return CreateOrder(
                 errors=[ErrorType(field='__all__', message=str(e))]
@@ -303,36 +387,41 @@ class CreateOrder(graphene.Mutation):
 
 
 # ============================================
-# Query Definitions - EXACTLY AS CHECKER EXPECTS
+# Query Class (Required by previous task)
 # ============================================
 class Query(graphene.ObjectType):
-    """Main Query class for CRM"""
+    """Query class for CRM"""
     
-    # Define all_customers field as required by checker
+    # All customers query
     all_customers = graphene.List(CustomerType)
     
-    # Keep other fields for functionality
+    # Customer queries
     customers = graphene.List(CustomerType)
     customer = graphene.Field(CustomerType, id=graphene.String(required=True))
     
+    # Product queries
     products = graphene.List(ProductType)
     product = graphene.Field(ProductType, id=graphene.String(required=True))
     
+    # Order queries
     orders = graphene.List(OrderType)
     order = graphene.Field(OrderType, id=graphene.String(required=True))
+    
+    # Customer count
+    customer_count = graphene.Int()
     
     # Resolver for all_customers
     def resolve_all_customers(self, info):
         return Customer.objects.all()
     
-    # Resolvers for other fields
+    # Resolver for customers (same as all_customers)
     def resolve_customers(self, info):
         return Customer.objects.all()
     
     def resolve_customer(self, info, id):
         try:
             return Customer.objects.get(id=id)
-        except Customer.DoesNotExist:
+        except (Customer.DoesNotExist, ValueError):
             return None
     
     def resolve_products(self, info):
@@ -341,24 +430,34 @@ class Query(graphene.ObjectType):
     def resolve_product(self, info, id):
         try:
             return Product.objects.get(id=id)
-        except Product.DoesNotExist:
+        except (Product.DoesNotExist, ValueError):
             return None
     
     def resolve_orders(self, info):
-        return Order.objects.all()
+        return Order.objects.all().order_by('-order_date')
     
     def resolve_order(self, info, id):
         try:
             return Order.objects.get(id=id)
-        except Order.DoesNotExist:
+        except (Order.DoesNotExist, ValueError):
             return None
+    
+    def resolve_customer_count(self, info):
+        return Customer.objects.count()
 
 
 # ============================================
-# Mutation Definitions
+# Mutation Class
 # ============================================
 class Mutation(graphene.ObjectType):
+    """Mutation class for CRM"""
+    
+    # Customer mutations
     create_customer = CreateCustomer.Field()
     bulk_create_customers = BulkCreateCustomers.Field()
+    
+    # Product mutation
     create_product = CreateProduct.Field()
+    
+    # Order mutation
     create_order = CreateOrder.Field()
