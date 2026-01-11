@@ -1,6 +1,6 @@
 """
-CRM Heartbeat Logger Cron Job
-Logs heartbeat every 5 minutes with GraphQL endpoint verification
+CRM Cron Jobs
+Contains scheduled tasks for the CRM application
 """
 
 import os
@@ -9,6 +9,10 @@ from datetime import datetime
 
 # Add project to path for Django imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# ============================================================================
+# HEARTBEAT LOGGER
+# ============================================================================
 
 def log_crm_heartbeat():
     """
@@ -26,10 +30,9 @@ def log_crm_heartbeat():
     try:
         # ============================================
         # GRAPHQL ENDPOINT VERIFICATION
-        # Using gql library as requested
         # ============================================
         try:
-            # Import GraphQL client - THESE IMPORTS ARE REQUIRED
+            # Import GraphQL client
             from gql import gql, Client
             from gql.transport.requests import RequestsHTTPTransport
             
@@ -46,7 +49,6 @@ def log_crm_heartbeat():
             )
             
             # Define query for hello field
-            # Note: Your schema must have a 'hello' field in your GraphQL schema
             query = gql("""
                 query {
                     hello
@@ -59,7 +61,21 @@ def log_crm_heartbeat():
             if result and 'hello' in result:
                 graphql_status = f"GraphQL: {result['hello']}"
             else:
-                graphql_status = "GraphQL: No hello field in response"
+                # Try introspection query if hello doesn't exist
+                query = gql("""
+                    query {
+                        __schema {
+                            queryType {
+                                name
+                            }
+                        }
+                    }
+                """)
+                result = client.execute(query)
+                if result and '__schema' in result:
+                    graphql_status = "GraphQL: Endpoint responsive"
+                else:
+                    graphql_status = "GraphQL: No response"
                 
         except Exception as graphql_error:
             graphql_status = f"GraphQL Error: {str(graphql_error)[:100]}"
@@ -97,126 +113,17 @@ def log_crm_heartbeat():
 
 
 # ============================================================================
-# ALTERNATIVE: If you don't have a 'hello' field in your schema
+# LOW STOCK UPDATER
 # ============================================================================
-
-def log_crm_heartbeat_alternative():
-    """
-    Alternative version if your GraphQL schema doesn't have a 'hello' field.
-    Uses introspection instead.
-    """
-    
-    timestamp = datetime.now().strftime("%d/%m/%Y-%H:%M:%S")
-    message = f"{timestamp} CRM is alive"
-    
-    try:
-        # GraphQL verification
-        try:
-            from gql import gql, Client
-            from gql.transport.requests import RequestsHTTPTransport
-            
-            transport = RequestsHTTPTransport(
-                url='http://localhost:8000/graphql',
-                verify=True,
-            )
-            
-            client = Client(
-                transport=transport,
-                fetch_schema_from_transport=True,
-            )
-            
-            # Use introspection query instead of 'hello'
-            query = gql("""
-                query {
-                    __schema {
-                        queryType {
-                            name
-                        }
-                    }
-                }
-            """)
-            
-            result = client.execute(query)
-            
-            if result and '__schema' in result:
-                graphql_status = "GraphQL: Endpoint responsive"
-            else:
-                graphql_status = "GraphQL: No response"
-                
-        except Exception as e:
-            graphql_status = f"GraphQL: {str(e)[:50]}"
-        
-        message += f" | {graphql_status}"
-        
-        # Log to file
-        with open("/tmp/crm_heartbeat_log.txt", "a") as f:
-            f.write(message + "\n")
-        
-        print(f"Heartbeat: {message}")
-        return True
-        
-    except Exception as e:
-        error_msg = f"{timestamp} ERROR: {str(e)}"
-        try:
-            with open("/tmp/crm_heartbeat_log.txt", "a") as f:
-                f.write(error_msg + "\n")
-        except:
-            print(error_msg)
-        return False
-
-
-# ============================================================================
-# TEST FUNCTION
-# ============================================================================
-
-if __name__ == "__main__":
-    """Test the function directly"""
-    print("Testing CRM heartbeat logger...")
-    
-    # Set up Django if needed
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alx_backend_graphql_crm.settings')
-    
-    try:
-        import django
-        django.setup()
-    except Exception as e:
-        print(f"Django setup warning: {e}")
-    
-    # Run the heartbeat function
-    success = log_crm_heartbeat()
-    
-    if success:
-        print("✓ Heartbeat logged successfully")
-        
-        # Show the log file
-        try:
-            with open("/tmp/crm_heartbeat_log.txt", 'r') as f:
-                lines = f.readlines()
-                if lines:
-                    print(f"Last entry: {lines[-1].strip()}")
-        except:
-            pass
-    else:
-        print("✗ Failed to log heartbeat")
-    
-    sys.exit(0 if success else 1)
-"""
-Add to your existing crm/cron.py file
-"""
 
 def update_low_stock():
     """
     Cron job that runs every 12 hours to update low-stock products.
     Executes GraphQL mutation to increment stock for products with stock < 10.
+    Logs updates to /tmp/low_stock_updates_log.txt
     """
     
-    from datetime import datetime
-    import sys
-    
-    # Get timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Log file
     LOG_FILE = "/tmp/low_stock_updates_log.txt"
     
     try:
@@ -238,53 +145,37 @@ def update_low_stock():
                 fetch_schema_from_transport=True,
             )
             
-            # Define the mutation
-            # Adjust based on your actual mutation name and structure
+            # Define the mutation based on simplified schema
+            # Using the simplified mutation that returns success, message, updated_count
             mutation = gql("""
-                mutation UpdateLowStock($incrementBy: Int = 10) {
-                    updateLowStockProducts(incrementBy: $incrementBy) {
+                mutation {
+                    updateLowStockProducts {
+                        success
                         message
-                        count
-                        updatedProducts {
-                            product {
-                                id
-                                name
-                                sku
-                                stock
-                            }
-                            previousStock
-                            newStock
-                        }
+                        updatedCount
                     }
                 }
             """)
             
             # Execute mutation
-            variables = {"incrementBy": 10}
-            result = client.execute(mutation, variable_values=variables)
+            result = client.execute(mutation)
             
             mutation_result = result.get('updateLowStockProducts', {})
             
             # Log the results
-            message = mutation_result.get('message', 'No message')
-            count = mutation_result.get('count', 0)
-            updated_products = mutation_result.get('updatedProducts', [])
+            success = mutation_result.get('success', False)
+            message = mutation_result.get('message', 'No message received')
+            updated_count = mutation_result.get('updatedCount', 0)
             
             # Prepare log entry
             log_entry = f"[{timestamp}] {message}\n"
             
-            if updated_products:
-                log_entry += f"Updated {count} products:\n"
-                for item in updated_products:
-                    product = item.get('product', {})
-                    product_name = product.get('name', 'Unknown Product')
-                    product_sku = product.get('sku', 'N/A')
-                    previous_stock = item.get('previousStock', 'N/A')
-                    new_stock = item.get('newStock', 'N/A')
-                    
-                    log_entry += f"  - {product_name} (SKU: {product_sku}): {previous_stock} -> {new_stock}\n"
+            if success and updated_count > 0:
+                log_entry += f"Successfully updated {updated_count} products with stock < 10\n"
+            elif success:
+                log_entry += "No products with stock < 10 found\n"
             else:
-                log_entry += "No products were updated.\n"
+                log_entry += f"Update failed: {message}\n"
             
             log_entry += "-" * 50 + "\n"
             
@@ -321,116 +212,114 @@ def update_low_stock():
 
 
 # ============================================================================
-# ALTERNATIVE: Using Direct Django ORM (if GraphQL isn't working)
+# TEST FUNCTIONS
 # ============================================================================
 
-def update_low_stock_direct():
-    """
-    Alternative version that uses Django ORM directly instead of GraphQL.
-    Useful for debugging or if GraphQL mutation isn't working.
-    """
+def test_heartbeat():
+    """Test the heartbeat function"""
+    print("Testing CRM heartbeat logger...")
     
-    from datetime import datetime
-    import os
-    import django
-    
-    # Setup Django
+    # Set up Django if needed
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alx_backend_graphql_crm.settings')
-    django.setup()
-    
-    from crm.models import Product
-    from django.db.models import F
-    
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    LOG_FILE = "/tmp/low_stock_updates_log.txt"
     
     try:
-        # Get low stock products
-        low_stock = Product.objects.filter(stock__lt=10)
-        count = low_stock.count()
-        
-        log_entry = f"[{timestamp}] "
-        
-        if count == 0:
-            log_entry += "No products with stock < 10 found.\n"
-        else:
-            # Get details before update
-            product_details = []
-            for product in low_stock:
-                product_details.append({
-                    'name': product.name,
-                    'sku': product.sku,
-                    'previous_stock': product.stock,
-                    'new_stock': product.stock + 10
-                })
-            
-            # Update stock
-            updated = low_stock.update(stock=F('stock') + 10)
-            
-            log_entry += f"Updated {updated} low-stock products:\n"
-            for detail in product_details:
-                log_entry += f"  - {detail['name']} (SKU: {detail['sku']}): {detail['previous_stock']} -> {detail['new_stock']}\n"
-        
-        log_entry += "-" * 50 + "\n"
-        
-        # Write to log
-        with open(LOG_FILE, 'a') as f:
-            f.write(log_entry)
-        
-        print(f"Direct update executed: {log_entry}")
-        return True
-        
+        import django
+        django.setup()
     except Exception as e:
-        error_msg = f"[{timestamp}] ERROR in direct update: {str(e)}\n"
+        print(f"Django setup warning: {e}")
+    
+    # Run the heartbeat function
+    success = log_crm_heartbeat()
+    
+    if success:
+        print("✓ Heartbeat logged successfully")
+        
+        # Show the log file
         try:
-            with open(LOG_FILE, 'a') as f:
-                f.write(error_msg)
+            with open("/tmp/crm_heartbeat_log.txt", 'r') as f:
+                lines = f.readlines()
+                if lines:
+                    print(f"Last entry: {lines[-1].strip()}")
         except:
-            print(error_msg)
-        return False
+            pass
+    else:
+        print("✗ Failed to log heartbeat")
+    
+    return success
 
 
-# ============================================================================
-# TEST FUNCTION
-# ============================================================================
-
-def test_update_low_stock():
+def test_low_stock_update():
     """Test the update_low_stock function"""
     print("Testing low stock update...")
     
-    # Test with GraphQL
-    print("Testing GraphQL version...")
-    result = update_low_stock()
+    success = update_low_stock()
     
-    if result:
-        print("✓ GraphQL update completed")
+    if success:
+        print("✓ Low stock update completed")
         
         # Show log file
         try:
             with open("/tmp/low_stock_updates_log.txt", 'r') as f:
                 lines = f.readlines()
                 if lines:
-                    print("Last 5 log entries:")
-                    for line in lines[-10:]:
+                    print("Last log entries:")
+                    for line in lines[-5:]:
                         print(line.rstrip())
         except:
             pass
     else:
-        print("✗ GraphQL update failed")
-        
-        # Try direct version
-        print("\nTrying direct Django ORM version...")
-        result2 = update_low_stock_direct()
-        if result2:
-            print("✓ Direct update completed")
-        else:
-            print("✗ Both methods failed")
+        print("✗ Low stock update failed")
     
-    return result
+    return success
 
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
-    # When testing, you might want to use the direct version first
-    # success = update_low_stock_direct()
-    success = update_low_stock()
-    sys.exit(0 if success else 1)
+    """
+    Test both cron functions when script is run directly
+    """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Test CRM cron jobs")
+    parser.add_argument('--test', choices=['heartbeat', 'lowstock', 'all'], 
+                       default='all', help='Which test to run')
+    
+    args = parser.parse_args()
+    
+    # Set up Django
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alx_backend_graphql_crm.settings')
+    
+    try:
+        import django
+        django.setup()
+    except Exception as e:
+        print(f"Warning: Django setup failed: {e}")
+    
+    if args.test == 'heartbeat' or args.test == 'all':
+        print("\n" + "="*50)
+        print("TESTING HEARTBEAT LOGGER")
+        print("="*50)
+        heartbeat_success = test_heartbeat()
+    
+    if args.test == 'lowstock' or args.test == 'all':
+        print("\n" + "="*50)
+        print("TESTING LOW STOCK UPDATE")
+        print("="*50)
+        stock_success = test_low_stock_update()
+    
+    if args.test == 'all':
+        print("\n" + "="*50)
+        print("SUMMARY")
+        print("="*50)
+        print(f"Heartbeat: {'PASS' if heartbeat_success else 'FAIL'}")
+        print(f"Low Stock: {'PASS' if stock_success else 'FAIL'}")
+        
+        sys.exit(0 if (heartbeat_success and stock_success) else 1)
+    else:
+        if args.test == 'heartbeat':
+            sys.exit(0 if heartbeat_success else 1)
+        else:  # lowstock
+            sys.exit(0 if stock_success else 1)

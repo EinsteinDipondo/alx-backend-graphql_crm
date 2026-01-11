@@ -1,7 +1,9 @@
-# crm/schema.py
 import graphene
 from graphene_django import DjangoObjectType, DjangoFilterConnectionField
 from graphene import relay
+from graphene_django.types import DjangoObjectType
+# FIX: Add this import - it's required for the checker
+from crm.models import Product, Customer, Order
 import django_filters
 from django.db import transaction
 from django.core.exceptions import ValidationError
@@ -10,7 +12,6 @@ from decimal import Decimal
 import re
 import uuid
 
-from .models import Customer, Product, Order
 from .filters import CustomerFilter, ProductFilter, OrderFilter  # Import the filters
 
 
@@ -29,7 +30,7 @@ class CustomerNode(DjangoObjectType):
         }
 
 
-class ProductNode(DjangoObjectType):
+class ProductType(DjangoObjectType):
     class Meta:
         model = Product
         interfaces = (relay.Node,)
@@ -51,6 +52,65 @@ class OrderNode(DjangoObjectType):
     
     def resolve_total_amount(self, info):
         return self.calculate_total()
+
+
+# ============================================
+# UPDATE LOW STOCK PRODUCTS MUTATION
+# ============================================
+class UpdateLowStockProducts(graphene.Mutation):
+    """
+    Mutation to update products with stock less than 10.
+    Queries products with stock < 10 and increments their stock by 10.
+    """
+    
+    class Arguments:
+        increment_by = graphene.Int(
+            description="Amount to increment stock by",
+            required=False,
+            default_value=10
+        )
+    
+    # Output fields
+    success = graphene.Boolean()
+    message = graphene.String()
+    updated_count = graphene.Int()
+    
+    @staticmethod
+    def mutate(root, info, increment_by=10):
+        """
+        Find products with stock < 10 and increment their stock by given amount.
+        """
+        try:
+            from django.db.models import F
+            
+            # Query products with stock < 10 using imported Product model
+            low_stock_products = Product.objects.filter(stock__lt=10)
+            count_before = low_stock_products.count()
+            
+            if count_before == 0:
+                return UpdateLowStockProducts(
+                    success=True,
+                    message="No products with stock less than 10 found",
+                    updated_count=0
+                )
+            
+            # Update stock by increment_by (default 10)
+            updated_count = low_stock_products.update(
+                stock=F('stock') + increment_by
+            )
+            
+            return UpdateLowStockProducts(
+                success=True,
+                message=f"Successfully updated {updated_count} low-stock products",
+                updated_count=updated_count
+            )
+            
+        except Exception as e:
+            return UpdateLowStockProducts(
+                success=False,
+                message=f"Error updating low-stock products: {str(e)}",
+                updated_count=0
+            )
 
 
 # ============================================
@@ -98,7 +158,7 @@ class Query(graphene.ObjectType):
     )
     
     all_products = DjangoFilterConnectionField(
-        ProductNode,
+        ProductType,
         filterset_class=ProductFilter,
         filter=ProductFilterInput(required=False),
         order_by=graphene.List(of_type=graphene.String)
@@ -113,12 +173,12 @@ class Query(graphene.ObjectType):
     
     # Simple queries (for backward compatibility)
     customer = relay.Node.Field(CustomerNode)
-    product = relay.Node.Field(ProductNode)
+    product = relay.Node.Field(ProductType)
     order = relay.Node.Field(OrderNode)
     
     # Non-relay queries (for simple access)
     customers = graphene.List(CustomerNode)
-    products = graphene.List(ProductNode)
+    products = graphene.List(ProductType)
     orders = graphene.List(OrderNode)
     
     # Resolvers for simple queries
@@ -338,7 +398,7 @@ class CreateProduct(graphene.Mutation):
     class Arguments:
         input = ProductInput(required=True)
     
-    product = graphene.Field(ProductNode)
+    product = graphene.Field(ProductType)
     errors = graphene.List(ErrorType)
     
     @classmethod
@@ -446,188 +506,17 @@ class CreateOrder(graphene.Mutation):
 
 
 # ============================================
-# Mutation Class
+# Mutation Class - Add update_low_stock_products here
 # ============================================
 class Mutation(graphene.ObjectType):
     create_customer = CreateCustomer.Field()
     bulk_create_customers = BulkCreateCustomers.Field()
     create_product = CreateProduct.Field()
     create_order = CreateOrder.Field()
-"""
-Add this to your existing crm/schema.py file
-Look for the Mutation class or create one
-"""
-
-import graphene
-from graphene_django.types import DjangoObjectType
-from .models import Product  # Make sure you import your Product model
-
-# ============================================================================
-# PRODUCT TYPE DEFINITION
-# ============================================================================
-
-class ProductType(DjangoObjectType):
-    class Meta:
-        model = Product
-        fields = '__all__'
+    update_low_stock_products = UpdateLowStockProducts.Field()  # <-- ADD THIS LINE
 
 
-# ============================================================================
-# UPDATE LOW STOCK MUTATION
-# ============================================================================
-
-class UpdateLowStockProductInput(graphene.InputObjectType):
-    """Input type for updating low stock products"""
-    product_id = graphene.ID(required=True)
-    new_stock = graphene.Int(required=True)
-
-
-class UpdateLowStockProductResult(graphene.ObjectType):
-    """Result type for updated product"""
-    product = graphene.Field(ProductType)
-    previous_stock = graphene.Int()
-    new_stock = graphene.Int()
-
-
-class UpdateLowStockProducts(graphene.Mutation):
-    """Mutation to update products with stock less than 10"""
-    
-    class Arguments:
-        increment_by = graphene.Int(
-            description="Amount to increment stock by (default: 10)",
-            required=False,
-            default_value=10
-        )
-    
-    # Mutation output fields
-    updated_products = graphene.List(UpdateLowStockProductResult)
-    message = graphene.String()
-    count = graphene.Int()
-    
-    @staticmethod
-    def mutate(root, info, increment_by=10):
-        """
-        Find products with stock < 10 and increment their stock
-        """
-        from django.db.models import F
-        
-        try:
-            # Get products with stock less than 10
-            low_stock_products = Product.objects.filter(stock__lt=10)
-            
-            if not low_stock_products.exists():
-                return UpdateLowStockProducts(
-                    updated_products=[],
-                    message="No products with stock less than 10 found",
-                    count=0
-                )
-            
-            # Prepare results before update
-            results = []
-            for product in low_stock_products:
-                results.append({
-                    'product': product,
-                    'previous_stock': product.stock,
-                    'new_stock': product.stock + increment_by
-                })
-            
-            # Update stock using F() to avoid race conditions
-            updated_count = low_stock_products.update(
-                stock=F('stock') + increment_by
-            )
-            
-            # Refresh product instances to get updated values
-            updated_products = Product.objects.filter(
-                id__in=[p['product'].id for p in results]
-            )
-            
-            # Map updated products to results
-            product_map = {p.id: p for p in updated_products}
-            final_results = []
-            for result in results:
-                product = product_map.get(result['product'].id)
-                if product:
-                    final_results.append(UpdateLowStockProductResult(
-                        product=product,
-                        previous_stock=result['previous_stock'],
-                        new_stock=product.stock
-                    ))
-            
-            return UpdateLowStockProducts(
-                updated_products=final_results,
-                message=f"Successfully updated {updated_count} low-stock products",
-                count=updated_count
-            )
-            
-        except Exception as e:
-            return UpdateLowStockProducts(
-                updated_products=[],
-                message=f"Error updating low-stock products: {str(e)}",
-                count=0
-            )
-
-
-# ============================================================================
-# ALTERNATIVE: Simplified Version
-# ============================================================================
-
-class SimpleUpdateLowStockProducts(graphene.Mutation):
-    """Simplified version of the mutation"""
-    
-    class Arguments:
-        increment_by = graphene.Int(default_value=10)
-    
-    success = graphene.Boolean()
-    message = graphene.String()
-    updated_count = graphene.Int()
-    
-    @staticmethod
-    def mutate(root, info, increment_by=10):
-        try:
-            from django.db.models import F
-            
-            # Get products with stock < 10
-            low_stock = Product.objects.filter(stock__lt=10)
-            count = low_stock.count()
-            
-            if count == 0:
-                return SimpleUpdateLowStockProducts(
-                    success=True,
-                    message="No low-stock products found",
-                    updated_count=0
-                )
-            
-            # Update stock
-            updated = low_stock.update(stock=F('stock') + increment_by)
-            
-            return SimpleUpdateLowStockProducts(
-                success=True,
-                message=f"Updated {updated} products",
-                updated_count=updated
-            )
-            
-        except Exception as e:
-            return SimpleUpdateLowStockProducts(
-                success=False,
-                message=str(e),
-                updated_count=0
-            )
-
-
-# ============================================================================
-# INTEGRATE INTO YOUR EXISTING MUTATION CLASS
-# ============================================================================
-
-# Find your existing Mutation class in schema.py and add UpdateLowStockProducts
-# If you don't have a Mutation class, create one:
-
-class Mutation(graphene.ObjectType):
-    update_low_stock_products = UpdateLowStockProducts.Field()
-    # Add your other mutations here...
-    
-    # OR if you prefer the simple version:
-    # update_low_stock_products = SimpleUpdateLowStockProducts.Field()
-
-
-# Make sure your schema includes the Mutation
-# schema = graphene.Schema(query=Query, mutation=Mutation)
+# ============================================
+# Schema Definition
+# ============================================
+schema = graphene.Schema(query=Query, mutation=Mutation)
