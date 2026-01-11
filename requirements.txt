@@ -9,3 +9,7 @@ requests
 django-crontab
 gql
 aiohttp
+celery
+django-celery-beat
+redis
+gql
