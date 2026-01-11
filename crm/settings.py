@@ -1,29 +1,48 @@
 """
-CRM Settings Module
-This file is created to satisfy the checker requirements for cron job configuration.
-The main Django project settings are in alx_backend_graphql_crm/settings.py
+CRM Settings for Django Crontab
 """
 
-# Import all settings from the main project
-from alx_backend_graphql_crm.settings import *
+# Import from main settings if available
+try:
+    from alx_backend_graphql_crm.settings import *
+except ImportError:
+    # Fallback minimal settings
+    import os
+    from pathlib import Path
+    
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    
+    SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-temp-key-for-cron')
+    DEBUG = True
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+    
+    INSTALLED_APPS = [
+        'django.contrib.auth',
+        'django.contrib.contenttypes',
+        'django_crontab',
+        'crm',
+    ]
+    
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+    
+    TIME_ZONE = 'UTC'
+    USE_TZ = True
 
 # ============================================================================
 # DJANGO-CRONTAB CONFIGURATION
-# This is what the checker is looking for
 # ============================================================================
 
+# Heartbeat cron job - runs every 5 minutes
 CRONJOBS = [
     ('*/5 * * * *', 'crm.cron.log_crm_heartbeat'),
-    ('0 */12 * * *', 'crm.cron.update_low_stock'),
 ]
 
+# Optional settings
 CRONTAB_COMMAND_SUFFIX = '2>&1'
-
-# ============================================================================
-# OPTIONAL: Override specific settings if needed
-# ============================================================================
-
-# If you need to override any settings for cron jobs specifically, do it here
-# For example:
-# DEBUG = False  # Cron jobs should run in production mode
-# ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+# CRONTAB_DJANGO_SETTINGS_MODULE = 'crm.settings'
+# CRONTAB_DJANGO_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

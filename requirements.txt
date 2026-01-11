@@ -6,3 +6,6 @@ django-crontab
 gql
 aiohttp
 requests
+django-crontab
+gql
+aiohttp
