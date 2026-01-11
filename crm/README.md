@@ -20,4 +20,4 @@ pip install -r requirements.txt
 # - celery
 # - django-celery-beat
 # - redis
-# - gql
+# - requests
