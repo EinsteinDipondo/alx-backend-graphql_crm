@@ -27,7 +27,8 @@ INSTALLED_APPS = [
     
     # Third-party apps
     'graphene_django',
-    'django_filters',  # Add this line
+    'django_filters',
+    'django_crontab',  # Add this line
     
     # Local apps
     'crm',
@@ -103,3 +104,15 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 GRAPHENE = {
     "SCHEMA": "alx_backend_graphql.schema.schema"
 }
+
+# ============================================================================
+# DJANGO-CRONTAB CONFIGURATION
+# ============================================================================
+
+# Heartbeat cron job - runs every 5 minutes
+CRONJOBS = [
+    ('*/5 * * * *', 'crm.cron.log_crm_heartbeat'),
+]
+
+# Optional: Where to store cron job logs
+CRONTAB_COMMAND_SUFFIX = '2>&1'
