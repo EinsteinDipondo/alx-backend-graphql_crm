@@ -113,27 +113,26 @@ def log_crm_heartbeat():
         return False
 
 
-# ============================================================================
-# Other cron functions (keep your existing functions)
-# ============================================================================
-
 def update_low_stock():
     """
     Cron job that runs every 12 hours to update low-stock products.
     Executes GraphQL mutation to increment stock for products with stock < 10.
-    Logs updates to /tmp/low_stock_updates_log.txt
+    Logs updated product names and new stock levels to /tmp/low_stock_updates_log.txt
     """
     
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     LOG_FILE = "/tmp/low_stock_updates_log.txt"
     
     try:
+        # Import GraphQL client
         from gql import gql, Client
         from gql.transport.requests import RequestsHTTPTransport
         
+        # Setup GraphQL client
         transport = RequestsHTTPTransport(
             url='http://localhost:8000/graphql',
             verify=True,
+            timeout=10,
         )
         
         client = Client(
@@ -141,12 +140,19 @@ def update_low_stock():
             fetch_schema_from_transport=True,
         )
         
+        # Define and execute the mutation
         mutation = gql("""
-            mutation {
+            mutation UpdateLowStock {
                 updateLowStockProducts {
                     success
                     message
                     updatedCount
+                    updatedProducts {
+                        id
+                        name
+                        stock
+                        sku
+                    }
                 }
             }
         """)
@@ -154,33 +160,62 @@ def update_low_stock():
         result = client.execute(mutation)
         data = result.get('updateLowStockProducts', {})
         
-        log_entry = f"[{timestamp}] {data.get('message', 'No message')}\n"
+        success = data.get('success', False)
+        message = data.get('message', 'No message received')
+        updated_count = data.get('updatedCount', 0)
+        updated_products = data.get('updatedProducts', [])
+        
+        # Prepare log entry
+        log_entry = f"[{timestamp}] {message}\n"
+        
+        if success and updated_count > 0 and updated_products:
+            log_entry += f"Updated {updated_count} products:\n"
+            
+            for product in updated_products:
+                product_name = product.get('name', 'Unknown Product')
+                product_sku = product.get('sku', 'N/A')
+                new_stock = product.get('stock', 'N/A')
+                
+                log_entry += f"  - {product_name} (SKU: {product_sku}): New stock level: {new_stock}\n"
+        
+        elif success and updated_count > 0:
+            log_entry += f"Updated {updated_count} products (details not available)\n"
+        
+        elif success:
+            log_entry += "No products with stock < 10 found to update.\n"
+        
+        else:
+            log_entry += f"Update failed: {message}\n"
+        
         log_entry += "-" * 50 + "\n"
         
+        # Write to log file
         with open(LOG_FILE, 'a') as f:
             f.write(log_entry)
         
-        print(f"Low stock update: {log_entry}")
-        return True
+        # Print to console for debugging
+        print(f"Low stock update completed at {timestamp}")
+        print(log_entry)
+        
+        return success
         
     except Exception as e:
-        error_msg = f"[{timestamp}] ERROR: {str(e)}\n"
+        error_msg = f"[{timestamp}] ERROR executing update_low_stock: {str(e)}\n"
         try:
             with open(LOG_FILE, 'a') as f:
                 f.write(error_msg)
         except:
             print(error_msg)
+        
         return False
 
 
 # ============================================================================
-# TEST FUNCTION
+# TEST FUNCTIONS
 # ============================================================================
 
-if __name__ == "__main__":
-    """
-    Test the heartbeat function when script is run directly
-    """
+def test_heartbeat():
+    """Test the heartbeat function"""
     print("Testing CRM heartbeat logger...")
     
     # Set up Django environment
@@ -209,4 +244,77 @@ if __name__ == "__main__":
     else:
         print("✗ Failed to log heartbeat")
     
-    sys.exit(0 if success else 1)
+    return success
+
+
+def test_low_stock():
+    """Test the low stock update function"""
+    print("Testing low stock update...")
+    
+    success = update_low_stock()
+    
+    if success:
+        print("✓ Low stock update completed")
+        
+        # Show log file
+        try:
+            with open("/tmp/low_stock_updates_log.txt", 'r') as f:
+                lines = f.readlines()
+                if lines:
+                    print("Last log entries:")
+                    for line in lines[-5:]:
+                        print(line.rstrip())
+        except:
+            pass
+    else:
+        print("✗ Low stock update failed")
+    
+    return success
+
+
+if __name__ == "__main__":
+    """
+    Test both cron functions when script is run directly
+    """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Test CRM cron jobs")
+    parser.add_argument('--test', choices=['heartbeat', 'lowstock', 'all'], 
+                       default='all', help='Which test to run')
+    
+    args = parser.parse_args()
+    
+    # Set up Django environment
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'crm.settings')
+    
+    try:
+        import django
+        django.setup()
+    except Exception as e:
+        print(f"Warning: Django setup failed: {e}")
+    
+    if args.test == 'heartbeat' or args.test == 'all':
+        print("\n" + "="*50)
+        print("TESTING HEARTBEAT LOGGER")
+        print("="*50)
+        heartbeat_success = test_heartbeat()
+    
+    if args.test == 'lowstock' or args.test == 'all':
+        print("\n" + "="*50)
+        print("TESTING LOW STOCK UPDATE")
+        print("="*50)
+        stock_success = test_low_stock()
+    
+    if args.test == 'all':
+        print("\n" + "="*50)
+        print("SUMMARY")
+        print("="*50)
+        print(f"Heartbeat: {'PASS' if heartbeat_success else 'FAIL'}")
+        print(f"Low Stock: {'PASS' if stock_success else 'FAIL'}")
+        
+        sys.exit(0 if (heartbeat_success and stock_success) else 1)
+    else:
+        if args.test == 'heartbeat':
+            sys.exit(0 if heartbeat_success else 1)
+        else:  # lowstock
+            sys.exit(0 if stock_success else 1)

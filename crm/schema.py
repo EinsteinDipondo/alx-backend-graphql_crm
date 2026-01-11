@@ -61,6 +61,7 @@ class UpdateLowStockProducts(graphene.Mutation):
     """
     Mutation to update products with stock less than 10.
     Queries products with stock < 10 and increments their stock by 10.
+    Returns a list of updated products and a success message.
     """
     
     class Arguments:
@@ -70,10 +71,11 @@ class UpdateLowStockProducts(graphene.Mutation):
             default_value=10
         )
     
-    # Output fields
+    # Output fields - MUST include updated_products list
     success = graphene.Boolean()
     message = graphene.String()
     updated_count = graphene.Int()
+    updated_products = graphene.List(ProductType)  # This is required!
     
     @staticmethod
     def mutate(root, info, increment_by=10):
@@ -83,7 +85,7 @@ class UpdateLowStockProducts(graphene.Mutation):
         try:
             from django.db.models import F
             
-            # Query products with stock < 10 using imported Product model
+            # Query products with stock < 10
             low_stock_products = Product.objects.filter(stock__lt=10)
             count_before = low_stock_products.count()
             
@@ -91,25 +93,34 @@ class UpdateLowStockProducts(graphene.Mutation):
                 return UpdateLowStockProducts(
                     success=True,
                     message="No products with stock less than 10 found",
-                    updated_count=0
+                    updated_count=0,
+                    updated_products=[]
                 )
+            
+            # Store product IDs before update
+            product_ids = list(low_stock_products.values_list('id', flat=True))
             
             # Update stock by increment_by (default 10)
             updated_count = low_stock_products.update(
                 stock=F('stock') + increment_by
             )
             
+            # Get updated products to return in the response
+            updated_products = Product.objects.filter(id__in=product_ids)
+            
             return UpdateLowStockProducts(
                 success=True,
                 message=f"Successfully updated {updated_count} low-stock products",
-                updated_count=updated_count
+                updated_count=updated_count,
+                updated_products=updated_products
             )
             
         except Exception as e:
             return UpdateLowStockProducts(
                 success=False,
                 message=f"Error updating low-stock products: {str(e)}",
-                updated_count=0
+                updated_count=0,
+                updated_products=[]
             )
 
 
