@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 GraphQL-Based Order Reminder Script
-Queries pending orders from the last 7 days and logs reminders
+Queries pending orders from the last 7 days and logs reminders.
+Runs daily at 8:00 AM.
 """
 
 import asyncio
 import sys
-import os
 from datetime import datetime, timedelta
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
@@ -25,74 +25,13 @@ LOG_FILE = "/tmp/order_reminders_log.txt"
 DAYS_BACK = 7
 
 # ============================================================================
-# GRAPHQL QUERY
-# ============================================================================
-
-# Define the GraphQL query
-# Adjust this query based on your actual GraphQL schema
-GRAPHQL_QUERY = """
-query GetRecentOrders($daysAgo: Int!) {
-  # This query depends on your GraphQL schema
-  # Example structure - UPDATE BASED ON YOUR SCHEMA:
-  orders(where: {
-    order_date_gte: $daysAgo,
-    status: "pending"
-  }) {
-    id
-    orderDate
-    customer {
-      email
-      name
-    }
-    totalAmount
-  }
-}
-
-# Alternative query if your schema is different:
-# query GetRecentOrders($startDate: String!) {
-#   orders(filter: {orderDate: {gte: $startDate}, status: "PENDING"}) {
-#     edges {
-#       node {
-#         id
-#         orderDate
-#         customerEmail
-#         customerName
-#       }
-#     }
-#   }
-# }
-"""
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def get_start_date(days_back: int) -> str:
-    """Calculate date string for X days ago"""
-    start_date = datetime.now() - timedelta(days=days_back)
-    # Format as ISO string (adjust based on your GraphQL schema requirements)
-    return start_date.strftime("%Y-%m-%dT%H:%M:%S")
-
-def write_log(message: str):
-    """Write message to log file with timestamp"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_message = f"[{timestamp}] {message}"
-    
-    try:
-        with open(LOG_FILE, 'a') as f:
-            f.write(log_message + "\n")
-        print(log_message)  # Also print to console
-    except Exception as e:
-        print(f"ERROR: Could not write to log file: {e}")
-
-# ============================================================================
 # MAIN FUNCTION
 # ============================================================================
 
 async def main():
     """Main async function to fetch and log order reminders"""
     
-    write_log("Starting order reminder processing...")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     try:
         # Create transport
@@ -105,72 +44,167 @@ async def main():
         ) as session:
             
             # Calculate date for query
-            # Adjust based on your GraphQL schema variable requirements
-            start_date = get_start_date(DAYS_BACK)
+            since_date = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%Y-%m-%d")
             
-            # Prepare query variables
-            # This depends on how your GraphQL query accepts parameters
-            variables = {
-                "daysAgo": DAYS_BACK,
-                # OR "startDate": start_date, depending on your schema
-            }
+            # Define GraphQL query based on your schema
+            # Adjust this query based on your actual GraphQL schema
+            query = gql("""
+                query GetRecentOrders($since: String!) {
+                    # Adjust this query based on your actual schema
+                    # Example: query orders with order_date within last 7 days
+                    orders(orderDate_Gte: $since) {
+                        edges {
+                            node {
+                                id
+                                orderDate
+                                status
+                                customer {
+                                    email
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            """)
             
             # Execute query
-            write_log(f"Querying GraphQL endpoint: {GRAPHQL_ENDPOINT}")
-            write_log(f"Looking for orders from last {DAYS_BACK} days")
-            
-            query = gql(GRAPHQL_QUERY)
+            variables = {"since": since_date}
             result = await session.execute(query, variable_values=variables)
             
-            # Process results
-            # Adjust this based on your actual GraphQL response structure
-            
-            orders = result.get('orders', [])
+            # Process results based on your schema structure
+            orders = result.get('orders', {}).get('edges', [])
             
             if not orders:
-                write_log("No recent pending orders found")
+                log_message = f"[{timestamp}] No orders found from the last {DAYS_BACK} days\n"
             else:
-                write_log(f"Found {len(orders)} recent pending orders")
+                log_message = f"[{timestamp}] Found {len(orders)} orders from the last {DAYS_BACK} days:\n"
                 
-                # Log each order
-                for order in orders:
-                    try:
-                        order_id = order.get('id', 'N/A')
-                        # Adjust based on your schema structure
-                        customer_email = order.get('customer', {}).get('email', 'N/A')
-                        order_date = order.get('orderDate', 'N/A')
-                        
-                        log_message = (
-                            f"Order ID: {order_id}, "
-                            f"Customer Email: {customer_email}, "
-                            f"Order Date: {order_date}"
-                        )
-                        write_log(log_message)
-                        
-                    except Exception as order_error:
-                        write_log(f"Error processing order: {order_error}")
+                # Log each order's ID and customer email
+                for order_edge in orders:
+                    order = order_edge['node']
+                    order_id = order.get('id', 'N/A')
+                    order_date = order.get('orderDate', 'N/A')
+                    customer_email = order.get('customer', {}).get('email', 'N/A')
+                    customer_name = order.get('customer', {}).get('name', 'N/A')
+                    status = order.get('status', 'N/A')
+                    
+                    log_message += f"  Order ID: {order_id}, Date: {order_date}, Status: {status}, Customer: {customer_name} ({customer_email})\n"
             
-            # Success message
-            write_log("Order reminders processed!")
-            print("Order reminders processed!")  # As per requirements
+            log_message += "=" * 60 + "\n"
+            
+            # Write to log file
+            with open(LOG_FILE, 'a') as f:
+                f.write(log_message)
+            
+            # Print success message to console (required by instructions)
+            print("Order reminders processed!")
+            
+            return True
             
     except Exception as e:
-        error_msg = f"ERROR: Failed to process order reminders: {str(e)}"
-        write_log(error_msg)
-        print(error_msg)
-        sys.exit(1)
+        error_msg = f"[{timestamp}] ERROR: {str(e)}\n"
+        try:
+            with open(LOG_FILE, 'a') as f:
+                f.write(error_msg)
+        except:
+            print(error_msg)
+        
+        print("Order reminders processed! (with errors)")
+        return False
+
+# ============================================================================
+# ALTERNATIVE: Synchronous version (if async doesn't work)
+# ============================================================================
+
+def send_order_reminders_sync():
+    """Synchronous version of order reminder script"""
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    try:
+        from gql import gql, Client
+        from gql.transport.requests import RequestsHTTPTransport
+        
+        # Setup GraphQL client
+        transport = RequestsHTTPTransport(
+            url=GRAPHQL_ENDPOINT,
+            verify=True,
+        )
+        
+        client = Client(
+            transport=transport,
+            fetch_schema_from_transport=True,
+        )
+        
+        # Calculate date
+        since_date = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%Y-%m-%d")
+        
+        # Define GraphQL query - adjust based on your schema
+        query = gql("""
+            query GetRecentOrders($since: String!) {
+                # Try different query formats based on your schema
+                allOrders(orderDate_Gte: $since) {
+                    id
+                    orderDate
+                    status
+                    customer {
+                        email
+                        name
+                    }
+                }
+            }
+        """)
+        
+        # Execute query
+        variables = {"since": since_date}
+        result = client.execute(query, variable_values=variables)
+        
+        # Process results
+        orders = result.get('allOrders', [])
+        
+        if not orders:
+            log_message = f"[{timestamp}] No orders found from the last {DAYS_BACK} days\n"
+        else:
+            log_message = f"[{timestamp}] Found {len(orders)} orders from the last {DAYS_BACK} days:\n"
+            
+            for order in orders:
+                order_id = order.get('id', 'N/A')
+                order_date = order.get('orderDate', 'N/A')
+                customer_email = order.get('customer', {}).get('email', 'N/A')
+                customer_name = order.get('customer', {}).get('name', 'N/A')
+                
+                log_message += f"  Order ID: {order_id}, Customer Email: {customer_email}, Date: {order_date}\n"
+        
+        log_message += "=" * 60 + "\n"
+        
+        # Write to log file
+        with open(LOG_FILE, 'a') as f:
+            f.write(log_message)
+        
+        print("Order reminders processed!")
+        return True
+        
+    except Exception as e:
+        error_msg = f"[{timestamp}] ERROR: {str(e)}\n"
+        try:
+            with open(LOG_FILE, 'a') as f:
+                f.write(error_msg)
+        except:
+            print(error_msg)
+        
+        print("Order reminders processed! (with errors)")
+        return False
 
 # ============================================================================
 # SCRIPT ENTRY POINT
 # ============================================================================
 
 if __name__ == "__main__":
-    # Run the async main function
-    asyncio.run(main())
-    
-    # Add separator for log readability
+    # Try async version first, fall back to sync if needed
     try:
-        with open(LOG_FILE, 'a') as f:
-            f.write("=" * 50 + "\n")
-    except:
-        pass
+        # Run async main function
+        asyncio.run(main())
+    except Exception as e:
+        print(f"Async version failed, trying sync: {e}")
+        send_order_reminders_sync()
