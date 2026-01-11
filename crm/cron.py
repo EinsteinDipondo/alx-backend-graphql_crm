@@ -1,119 +1,93 @@
 """
 CRM Heartbeat Logger Cron Job
-This module defines cron jobs for the CRM application.
+Logs heartbeat every 5 minutes with GraphQL endpoint verification
 """
 
 import os
 import sys
 from datetime import datetime
-import logging
 
-# Optional: Import Django components for GraphQL verification
-try:
-    from django.conf import settings
-    # Only import graphene if you want to verify GraphQL endpoint
-    # from graphene import Schema
-    # from your_app.schema import schema
-except ImportError:
-    # Django not available in some contexts
-    pass
-
-# ============================================================================
-# HEARTBEAT LOGGER FUNCTION
-# ============================================================================
+# Add project to path for Django imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def log_crm_heartbeat():
     """
-    Logs a heartbeat message every 5 minutes to confirm CRM health.
-    
-    This function:
-    1. Logs timestamped "CRM is alive" message
-    2. Optionally verifies GraphQL endpoint is responsive
-    3. Appends to log file without overwriting
+    Logs heartbeat message every 5 minutes.
+    Format: DD/MM/YYYY-HH:MM:SS CRM is alive
+    Also verifies GraphQL endpoint by querying the hello field.
     """
     
-    # Log file path
-    LOG_FILE = "/tmp/crm_heartbeat_log.txt"
-    
-    # Get current timestamp in required format: DD/MM/YYYY-HH:MM:SS
+    # Get timestamp in required format
     timestamp = datetime.now().strftime("%d/%m/%Y-%H:%M:%S")
     
-    # Prepare the heartbeat message
-    heartbeat_message = f"{timestamp} CRM is alive"
+    # Base message
+    message = f"{timestamp} CRM is alive"
     
     try:
         # ============================================
-        # OPTIONAL: Verify GraphQL endpoint is responsive
+        # GRAPHQL ENDPOINT VERIFICATION
+        # Using gql library as requested
         # ============================================
-        # Uncomment and adapt this section if you want to verify GraphQL
-        """
         try:
-            # Example: Query a simple GraphQL field
-            # This assumes you have a GraphQL schema with a 'hello' field
-            from graphene import Schema
-            from your_app.schema import Query
+            # Import GraphQL client - THESE IMPORTS ARE REQUIRED
+            from gql import gql, Client
+            from gql.transport.requests import RequestsHTTPTransport
             
-            schema = Schema(query=Query)
-            result = schema.execute('{ hello }')
+            # Configure GraphQL client
+            transport = RequestsHTTPTransport(
+                url='http://localhost:8000/graphql',
+                verify=True,
+                retries=3,
+            )
             
-            if result.data and result.data.get('hello'):
-                heartbeat_message += f" | GraphQL: {result.data['hello']}"
+            client = Client(
+                transport=transport,
+                fetch_schema_from_transport=True,
+            )
+            
+            # Define query for hello field
+            # Note: Your schema must have a 'hello' field in your GraphQL schema
+            query = gql("""
+                query {
+                    hello
+                }
+            """)
+            
+            # Execute query
+            result = client.execute(query)
+            
+            if result and 'hello' in result:
+                graphql_status = f"GraphQL: {result['hello']}"
             else:
-                heartbeat_message += " | GraphQL: No response"
+                graphql_status = "GraphQL: No hello field in response"
                 
         except Exception as graphql_error:
-            heartbeat_message += f" | GraphQL Error: {str(graphql_error)}"
-        """
+            graphql_status = f"GraphQL Error: {str(graphql_error)[:100]}"
+        
+        # Add GraphQL status to message
+        message += f" | {graphql_status}"
         
         # ============================================
-        # ALTERNATIVE: Simple GraphQL verification
-        # ============================================
-        # If you want to test the GraphQL endpoint without executing queries
-        
-        graphql_status = "Not checked"
-        
-        try:
-            # Simple check: Verify GraphQL endpoint exists
-            # You could make an HTTP request to the GraphQL endpoint
-            import requests
-            response = requests.post(
-                'http://localhost:8000/graphql',
-                json={'query': '{ __schema { queryType { name } } }'},
-                timeout=5
-            )
-            if response.status_code == 200:
-                graphql_status = "GraphQL: Responsive"
-            else:
-                graphql_status = f"GraphQL: HTTP {response.status_code}"
-                
-            heartbeat_message += f" | {graphql_status}"
-            
-        except requests.exceptions.RequestException as e:
-            heartbeat_message += f" | GraphQL: Unreachable ({str(e)})"
-        except ImportError:
-            # requests not installed
-            heartbeat_message += " | GraphQL: Check skipped (requests not installed)"
-        except Exception as e:
-            heartbeat_message += f" | GraphQL: Check failed ({str(e)})"
-        
-        # ============================================
-        # LOG THE HEARTBEAT MESSAGE
+        # LOG TO FILE
         # ============================================
         
-        # Append to log file (creates file if doesn't exist)
-        with open(LOG_FILE, 'a') as log_file:
-            log_file.write(heartbeat_message + "\n")
+        log_file_path = "/tmp/crm_heartbeat_log.txt"
         
-        # Also print to console for debugging (visible when running manually)
-        print(f"Heartbeat logged: {heartbeat_message}")
+        # Append to log file (creates if doesn't exist)
+        with open(log_file_path, 'a') as log_file:
+            log_file.write(message + "\n")
+        
+        # Print to console for debugging
+        print(f"Heartbeat logged: {message}")
         
         return True
         
     except Exception as e:
-        # If logging fails, try to log the error
-        error_message = f"{timestamp} ERROR: Failed to log heartbeat - {str(e)}"
+        # Error handling
+        error_message = f"{timestamp} ERROR: {str(e)}"
+        
         try:
-            with open(LOG_FILE, 'a') as log_file:
+            with open("/tmp/crm_heartbeat_log.txt", 'a') as log_file:
                 log_file.write(error_message + "\n")
         except:
             # Last resort: print to stderr
@@ -123,74 +97,106 @@ def log_crm_heartbeat():
 
 
 # ============================================================================
-# ADDITIONAL CRON JOBS (Optional)
+# ALTERNATIVE: If you don't have a 'hello' field in your schema
 # ============================================================================
 
-def log_crm_status():
-    """Optional: More detailed CRM status check"""
+def log_crm_heartbeat_alternative():
+    """
+    Alternative version if your GraphQL schema doesn't have a 'hello' field.
+    Uses introspection instead.
+    """
+    
     timestamp = datetime.now().strftime("%d/%m/%Y-%H:%M:%S")
-    message = f"{timestamp} CRM status check completed"
+    message = f"{timestamp} CRM is alive"
     
     try:
-        # You could add database checks, cache checks, etc.
-        from django.db import connection
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            db_status = "Database: OK"
-    except Exception as e:
-        db_status = f"Database: Error - {str(e)}"
-    
-    full_message = f"{message} | {db_status}"
-    
-    with open("/tmp/crm_status_log.txt", 'a') as f:
-        f.write(full_message + "\n")
-    
-    return True
-
-
-def cleanup_old_logs():
-    """Optional: Clean up old log files"""
-    import os
-    import glob
-    from datetime import datetime, timedelta
-    
-    log_pattern = "/tmp/crm_*.log"
-    days_to_keep = 7
-    
-    cutoff_date = datetime.now() - timedelta(days=days_to_keep)
-    
-    for log_file in glob.glob(log_pattern):
+        # GraphQL verification
         try:
-            file_mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
-            if file_mtime < cutoff_date:
-                os.remove(log_file)
-                print(f"Removed old log: {log_file}")
+            from gql import gql, Client
+            from gql.transport.requests import RequestsHTTPTransport
+            
+            transport = RequestsHTTPTransport(
+                url='http://localhost:8000/graphql',
+                verify=True,
+            )
+            
+            client = Client(
+                transport=transport,
+                fetch_schema_from_transport=True,
+            )
+            
+            # Use introspection query instead of 'hello'
+            query = gql("""
+                query {
+                    __schema {
+                        queryType {
+                            name
+                        }
+                    }
+                }
+            """)
+            
+            result = client.execute(query)
+            
+            if result and '__schema' in result:
+                graphql_status = "GraphQL: Endpoint responsive"
+            else:
+                graphql_status = "GraphQL: No response"
+                
         except Exception as e:
-            print(f"Error removing {log_file}: {e}")
-    
-    return True
+            graphql_status = f"GraphQL: {str(e)[:50]}"
+        
+        message += f" | {graphql_status}"
+        
+        # Log to file
+        with open("/tmp/crm_heartbeat_log.txt", "a") as f:
+            f.write(message + "\n")
+        
+        print(f"Heartbeat: {message}")
+        return True
+        
+    except Exception as e:
+        error_msg = f"{timestamp} ERROR: {str(e)}"
+        try:
+            with open("/tmp/crm_heartbeat_log.txt", "a") as f:
+                f.write(error_msg + "\n")
+        except:
+            print(error_msg)
+        return False
 
 
 # ============================================================================
-# TEST FUNCTION (for manual testing)
+# TEST FUNCTION
 # ============================================================================
 
 if __name__ == "__main__":
-    """Test the heartbeat function manually"""
+    """Test the function directly"""
     print("Testing CRM heartbeat logger...")
-    result = log_crm_heartbeat()
     
-    if result:
+    # Set up Django if needed
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'alx_backend_graphql_crm.settings')
+    
+    try:
+        import django
+        django.setup()
+    except Exception as e:
+        print(f"Django setup warning: {e}")
+    
+    # Run the heartbeat function
+    success = log_crm_heartbeat()
+    
+    if success:
         print("✓ Heartbeat logged successfully")
-        # Show last line of log
+        
+        # Show the log file
         try:
             with open("/tmp/crm_heartbeat_log.txt", 'r') as f:
                 lines = f.readlines()
                 if lines:
-                    print(f"Last log entry: {lines[-1].strip()}")
+                    print(f"Last entry: {lines[-1].strip()}")
         except:
             pass
     else:
-        print("✗ Heartbeat logging failed")
+        print("✗ Failed to log heartbeat")
     
-    sys.exit(0 if result else 1)
+    sys.exit(0 if success else 1)
